@@ -1,4 +1,5 @@
-# MarkovRandomWordGenerator https://tybiz.github.io/MarkovRandomWordGenerator/
+# MarkovRandomWordGenerator 
+https://tybiz.github.io/MarkovRandomWordGenerator/
 
 Generates nonsense words using a trigram Markov chain trained on a list of real words fetched by theme. The model is written in C and compiled to WebAssembly — it runs entirely in the browser.
 
