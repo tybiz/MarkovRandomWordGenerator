@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Word Generator</title>
+<script src="word_gen.js"></script>
+<style>
+  :root {
+    --bg: #000000;
+    --surface: #111111;
+    --border: rgba(255,255,255,0.1);
+    --accent: #ffffff;
+    --accent-dim: #cccccc;
+    --text: #ffffff;
+    --muted: #777777;
+    --radius: 10px;
+    --font: 'JetBrains Mono', 'Fira Mono', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+    gap: 2rem;
+  }
+  header { text-align: center; }
+  header h1 {
+    font-size: clamp(1.6rem, 4vw, 2.4rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--accent);
+  }
+  header p {
+    margin-top: 0.5rem;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  .card {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    width: 100%;
+    max-width: 480px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .row {
+    display: flex;
+    gap: 0.5rem;
+  }
+  input[type="text"] {
+    flex: 1;
+    background: var(--bg);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 0.9rem;
+    padding: 0.6rem 0.8rem;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  input[type="text"]:focus { border-color: var(--accent); }
+  input[type="text"]::placeholder { color: var(--muted); }
+  button {
+    background: var(--accent-dim);
+    border: none;
+    border-radius: var(--radius);
+    color: #fff;
+    font-family: var(--font);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0.6rem 1.1rem;
+    transition: background 0.15s, transform 0.1s;
+    white-space: nowrap;
+  }
+  button:hover { background: var(--accent); }
+  button:active { transform: scale(0.97); }
+  button:disabled { background: #333; color: var(--muted); cursor: not-allowed; }
+  #status {
+    font-size: 0.78rem;
+    color: var(--muted);
+    min-height: 1.1em;
+  }
+  #status.error { color: #f09595; }
+  #status.ok { color: #97c459; }
+  .generate-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  #result {
+    font-size: clamp(2rem, 8vw, 3.5rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--accent);
+    min-height: 1.2em;
+    text-align: center;
+    word-break: break-all;
+    transition: opacity 0.15s;
+  }
+  #result.flash { opacity: 0.3; }
+  .count-label {
+    font-size: 0.75rem;
+    color: var(--muted);
+    text-align: center;
+  }
+  #words-preview {
+    background: var(--bg);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.6rem 0.8rem;
+    font-size: 0.72rem;
+    color: var(--muted);
+    max-height: 80px;
+    overflow-y: auto;
+    line-height: 1.6;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>// word_gen.wasm</h1>
+  <p>Markov trigram model · compiled from C · runs in your browser</p>
+</header>
+
+<div class="card">
+  <div class="row">
+    <input type="text" id="theme-input" placeholder="theme: ocean, space, fire…" maxlength="64" />
+    <button id="train-btn" disabled>train</button>
+  </div>
+
+  <div id="status">loading wasm…</div>
+  <div id="words-preview"></div>
+  <div class="count-label" id="word-count"></div>
+
+  <div class="generate-row">
+    <button id="gen-btn" disabled style="flex:1">generate →</button>
+  </div>
+  <div id="result"></div>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const statusEl = $('status');
+  const trainBtn  = $('train-btn');
+  const genBtn    = $('gen-btn');
+  const resultEl  = $('result');
+  const preview   = $('words-preview');
+  const countEl   = $('word-count');
+  const themeInput = $('theme-input');
+
+  let Module = null;
+  let wasmTrain = null;
+  let wasmGenerate = null;
+
+  function setStatus(msg, type = '') {
+    statusEl.textContent = msg;
+    statusEl.className = type;
+  }
+
+  async function loadWasm() {
+    try {
+      const m = await WordGenModule();
+      Module = m;
+      wasmTrain    = m.cwrap('train',          null,   ['number','number']);
+      wasmGenerate = m.cwrap('generate_word',  'string', []);
+      setStatus('wasm ready · enter a theme and click train', 'ok');
+      trainBtn.disabled = false;
+      themeInput.disabled = false;
+    } catch(e) {
+      setStatus('failed to load wasm: ' + e.message, 'error');
+    }
+  }
+
+  async function fetchWords(theme) {
+    const url = `https://api.datamuse.com/words?ml=${encodeURIComponent(theme)}&max=200`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('datamuse fetch failed');
+    const json = await res.json();
+    return json.map(w => w.word).filter(w => /^[a-z]+$/.test(w));
+  }
+
+  function trainWasm(words) {
+    const enc = new TextEncoder();
+    const ptrs = words.map(w => {
+      const buf = enc.encode(w + '\0');
+      const ptr = Module._malloc(buf.length);
+      Module.HEAPU8.set(buf, ptr);
+      return ptr;
+    });
+
+    const ptrArr = Module._malloc(ptrs.length * 4);
+    ptrs.forEach((p, i) => Module.HEAP32[(ptrArr >> 2) + i] = p);
+
+    wasmTrain(ptrArr, ptrs.length);
+
+    Module._free(ptrArr);
+    ptrs.forEach(p => Module._free(p));
+  }
+
+  trainBtn.addEventListener('click', async () => {
+    const theme = themeInput.value.trim();
+    if (!theme) { setStatus('enter a theme first', 'error'); return; }
+    trainBtn.disabled = true;
+    genBtn.disabled = true;
+    resultEl.textContent = '';
+    countEl.textContent = '';
+    preview.style.display = 'none';
+    setStatus(`fetching words for "${theme}"…`);
+    try {
+      const words = await fetchWords(theme);
+      if (words.length < 3) throw new Error('too few results, try another theme');
+      setStatus(`training on ${words.length} words…`);
+      trainWasm(words);
+
+      preview.style.display = 'block';
+      preview.textContent = words.join('  ·  ');
+      countEl.textContent = `${words.length} training words`;
+      setStatus('trained · click generate', 'ok');
+      genBtn.disabled = false;
+    } catch(e) {
+      setStatus(e.message, 'error');
+      trainBtn.disabled = false;
+    }
+    trainBtn.disabled = false;
+  });
+
+  genBtn.addEventListener('click', () => {
+    resultEl.classList.add('flash');
+    setTimeout(() => {
+      resultEl.textContent = wasmGenerate();
+      resultEl.classList.remove('flash');
+    }, 80);
+  });
+
+  themeInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !trainBtn.disabled) trainBtn.click();
+  });
+
+  themeInput.disabled = true;
+  loadWasm();
+</script>
+
+</body>
+</html>
